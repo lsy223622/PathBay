@@ -132,7 +132,7 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.HasPrefix(p, "/admin/") {
-		http.Error(w, "management initializing", 503)
+		a.admin(w, r)
 		return
 	}
 	s := a.snapshot.Load()

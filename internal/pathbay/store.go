@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/gofrs/flock"
 	_ "github.com/mattn/go-sqlite3"
+	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -29,6 +30,11 @@ type App struct {
 	readMu    sync.Mutex
 	readers   map[string]int
 	retired   map[string]bool
+	authMu    sync.Mutex
+	sessions  map[[32]byte]session
+	tokens    atomic.Pointer[map[string]Token]
+	hashSlot  chan struct{}
+	origin    *http.CrossOriginProtection
 }
 
 func openDB(p, synchronous string, busy int) (*sql.DB, error) {
@@ -69,7 +75,7 @@ func Open(o Options) (*App, error) {
 	if !ok {
 		return nil, fmt.Errorf("data directory is in use")
 	}
-	a := &App{lock: l, options: o, readers: map[string]int{}, retired: map[string]bool{}}
+	a := &App{lock: l, options: o, readers: map[string]int{}, retired: map[string]bool{}, sessions: map[[32]byte]session{}, hashSlot: make(chan struct{}, 1), origin: http.NewCrossOriginProtection()}
 	defer func() {
 		if err != nil {
 			a.Close()
@@ -89,6 +95,14 @@ func Open(o Options) (*App, error) {
 		return nil, err
 	}
 	_, err = a.db.Exec(`BEGIN; CREATE TABLE IF NOT EXISTS config (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS routes (id TEXT PRIMARY KEY, body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, route_id TEXT NOT NULL UNIQUE REFERENCES routes(id) ON DELETE CASCADE, name TEXT NOT NULL, size INTEGER NOT NULL); PRAGMA user_version=1; COMMIT;`)
+	if err != nil {
+		return nil, err
+	}
+	_, err = a.db.Exec(`CREATE TABLE IF NOT EXISTS administrator(id INTEGER PRIMARY KEY CHECK(id=1),username TEXT NOT NULL,password TEXT NOT NULL); CREATE TABLE IF NOT EXISTS tokens(id TEXT PRIMARY KEY,name TEXT NOT NULL,created INTEGER NOT NULL,digest TEXT NOT NULL UNIQUE);`)
+	if err != nil {
+		return nil, err
+	}
+	err = a.loadTokens()
 	if err != nil {
 		return nil, err
 	}

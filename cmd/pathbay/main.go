@@ -21,6 +21,9 @@ func env(key, fallback string) string {
 	return fallback
 }
 func main() {
+	if offline(os.Args[1:]) {
+		return
+	}
 	listen := flag.String("listen", env("PATHBAY_LISTEN", "127.0.0.1:7284"), "listen address")
 	dir := flag.String("data-dir", env("PATHBAY_DATA_DIR", "data"), "instance data directory")
 	proxies := flag.String("trusted-proxies", env("PATHBAY_TRUSTED_PROXIES", "127.0.0.1/32,::1/128"), "trusted proxy CIDRs")

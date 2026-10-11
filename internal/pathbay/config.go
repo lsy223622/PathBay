@@ -96,7 +96,7 @@ func normalizeDecoded(p string) (string, error) {
 	return p, nil
 }
 func validateRoute(r *Route) error {
-	p, err := NormalizePath(r.Path)
+	p, err := normalizeDecoded(r.Path)
 	if err != nil {
 		return err
 	}
