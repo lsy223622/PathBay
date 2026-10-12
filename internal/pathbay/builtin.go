@@ -25,7 +25,11 @@ func namedZone(name string) (*time.Location, error) {
 	if z := zoneCache.zones[name]; z != nil {
 		return z, nil
 	}
-	z, err := time.LoadLocation(name)
+	data, err := zoneBytes(name)
+	if err != nil {
+		return nil, err
+	}
+	z, err := zoneFromData(name, data)
 	if err != nil {
 		return nil, err
 	}

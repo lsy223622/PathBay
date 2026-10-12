@@ -27,15 +27,11 @@ func apiError(w http.ResponseWriter, code int, message string) {
 }
 func decodeBody(w http.ResponseWriter, r *http.Request, out any, limit int64) error {
 	r.Body = http.MaxBytesReader(w, r.Body, limit)
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(out); err != nil {
+	b, err := io.ReadAll(r.Body)
+	if err != nil {
 		return err
 	}
-	if decoder.Decode(new(any)) != io.EOF {
-		return fmt.Errorf("expected one JSON value")
-	}
-	return nil
+	return strictDecode(b, out)
 }
 func bodyError(w http.ResponseWriter, err error) {
 	var size *http.MaxBytesError
@@ -65,7 +61,7 @@ func page(r *http.Request) (int, int, error) {
 func (a *App) admin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if !strings.HasPrefix(r.URL.Path, "/admin/api/v1/") {
-		http.Error(w, "management UI initializing", 503)
+		adminPage(w, r)
 		return
 	}
 	endpoint := strings.TrimPrefix(r.URL.Path, "/admin/api/v1/")
@@ -142,9 +138,7 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request) {
 				apiError(w, code, err.Error())
 				return
 			}
-			a.mu.Lock()
-			_, err = a.db.ExecContext(r.Context(), "INSERT INTO administrator VALUES(1,?,?)", input.Username, hash)
-			a.mu.Unlock()
+			err = a.initializeAdmin(input.Username, hash)
 			if err != nil {
 				apiError(w, 409, "administrator already initialized")
 				return
@@ -169,6 +163,32 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
+	case endpoint == "config/export" && r.Method == "GET":
+		b, err := a.ExportConfig()
+		if err != nil {
+			apiError(w, 503, err.Error())
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition", `attachment; filename="pathbay-config.json"`)
+		w.Write(b)
+	case endpoint == "config/import" && r.Method == "POST":
+		var raw json.RawMessage
+		if err := decodeBody(w, r, &raw, 16<<20); err != nil {
+			bodyError(w, err)
+			return
+		}
+		if err := a.ImportConfig(raw); err != nil {
+			code := 400
+			if strings.Contains(err.Error(), "duplicate") {
+				code = 409
+			}
+			apiError(w, code, err.Error())
+			return
+		}
+		jsonResponse(w, 200, map[string]any{"imported": true})
+	case strings.HasPrefix(endpoint, "stats/"):
+		a.statsAPI(w, r, endpoint)
 	case endpoint == "logout" && r.Method == "POST":
 		if c, e := r.Cookie("pathbay_session"); e == nil {
 			a.authMu.Lock()
@@ -411,6 +431,9 @@ func (a *App) routeAPI(w http.ResponseWriter, r *http.Request, endpoint string) 
 	apiError(w, 405, "method not allowed")
 }
 func strictDecode(b []byte, out any) error {
+	if err := checkJSONKeys(b); err != nil {
+		return err
+	}
 	d := json.NewDecoder(strings.NewReader(string(b)))
 	d.DisallowUnknownFields()
 	return d.Decode(out)

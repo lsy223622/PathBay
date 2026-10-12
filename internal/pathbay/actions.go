@@ -8,8 +8,6 @@ import (
 func (a *App) respond(w http.ResponseWriter, r *http.Request, route *Route) {
 	v := route.Action
 	switch v.Type {
-	case "file", "directory":
-		a.fileResponse(w, r)
 	case "redirect":
 		target, _ := url.Parse(v.Target)
 		if v.PreserveQuery == nil || *v.PreserveQuery {

@@ -11,13 +11,22 @@ import (
 	"strings"
 )
 
-func (a *App) fileResponse(w http.ResponseWriter, r *http.Request) {
+func (a *App) fileResponse(w http.ResponseWriter, r *http.Request) (selected *Route) {
 	a.fileMu.RLock()
 	s := a.snapshot.Load()
-	route, _, _ := s.Match(r.Method, r.URL.Path)
-	if route == nil || !(route.Action.Type == "file" || route.Action.Type == "directory") {
+	route, code, allow := s.Match(r.Method, r.URL.Path)
+	selected = route
+	if route == nil {
 		a.fileMu.RUnlock()
-		http.NotFound(w, r)
+		if allow != "" {
+			w.Header().Set("Allow", allow)
+		}
+		http.Error(w, http.StatusText(code), code)
+		return
+	}
+	if route.Action.Type != "file" && route.Action.Type != "directory" {
+		a.fileMu.RUnlock()
+		a.respond(w, r, route)
 		return
 	}
 	v := route.Action
@@ -123,6 +132,7 @@ func (a *App) fileResponse(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": download}))
 	}
 	http.ServeContent(w, r, name, info.ModTime(), f)
+	return
 }
 func (a *App) Upload(id, name string, body io.Reader) error {
 	a.mu.Lock()

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type Options struct {
@@ -20,6 +21,7 @@ type Options struct {
 	UploadLimit    int64
 }
 type App struct {
+	StatsState
 	db        *sql.DB
 	lock      *flock.Flock
 	options   Options
@@ -35,6 +37,7 @@ type App struct {
 	tokens    atomic.Pointer[map[string]Token]
 	hashSlot  chan struct{}
 	origin    *http.CrossOriginProtection
+	zone      atomic.Pointer[time.Location]
 }
 
 func openDB(p, synchronous string, busy int) (*sql.DB, error) {
@@ -106,6 +109,13 @@ func Open(o Options) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	_, err = a.db.Exec(`CREATE TABLE IF NOT EXISTS timezone(id INTEGER PRIMARY KEY CHECK(id=1),name TEXT NOT NULL,data BLOB);`)
+	if err != nil {
+		return nil, err
+	}
+	if err = a.loadTimezone(); err != nil {
+		return nil, err
+	}
 	c := Config{Routes: []Route{}, Builtins: map[string]bool{"ip": false, "time": false, "random": false}, Settings: Settings{RetentionDays: 30}}
 	var body string
 	e := a.db.QueryRow("SELECT body FROM config WHERE id=1").Scan(&body)
@@ -125,6 +135,9 @@ func Open(o Options) (*App, error) {
 	a.snapshot.Store(s)
 	err = a.recoverFiles()
 	if err != nil {
+		return nil, err
+	}
+	if err = a.initStats(); err != nil {
 		return nil, err
 	}
 	return a, nil
@@ -171,6 +184,22 @@ func (a *App) saveLocked(c Config) error {
 func (a *App) Close() error {
 	var err error
 	a.closeOnce.Do(func() {
+		if a.statsDone != nil {
+			select {
+			case <-a.statsDone:
+			default:
+				if a.statsStop != nil {
+					close(a.statsStop)
+					<-a.statsDone
+				}
+			}
+		}
+		if a.statsRead != nil {
+			_ = a.statsRead.Close()
+		}
+		if a.statsDB != nil {
+			_ = a.statsDB.Close()
+		}
 		if a.db != nil {
 			err = a.db.Close()
 		}

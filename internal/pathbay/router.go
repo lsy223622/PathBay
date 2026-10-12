@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 )
 
 type Snapshot struct {
@@ -121,6 +122,20 @@ func (s *Snapshot) Match(method, p string) (*Route, int, string) {
 	return nil, 405, strings.Join(out, ", ")
 }
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	visitTime := time.Now()
+	kind, id := "", ""
+	tracked := &statusWriter{ResponseWriter: w, head: r.Method == "HEAD"}
+	w = tracked
+	defer func() {
+		if r.URL.Path == "/admin" || strings.HasPrefix(r.URL.Path, "/admin/") {
+			return
+		}
+		code := tracked.code
+		if code == 0 {
+			code = 200
+		}
+		a.recordVisit(r, code, kind, id, visitTime)
+	}()
 	p, err := normalizeDecoded(r.URL.Path)
 	if err != nil {
 		http.Error(w, "invalid path", 400)
@@ -137,6 +152,10 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	s := a.snapshot.Load()
 	if p == "/ip" || p == "/time" || p == "/random" {
+		name := strings.TrimPrefix(p, "/")
+		if s.Config.Builtins[name] && (r.Method == "GET" || r.Method == "HEAD") {
+			kind, id = "builtin", name
+		}
 		a.builtin(w, r, strings.TrimPrefix(p, "/"), s.Config.Builtins[strings.TrimPrefix(p, "/")])
 		return
 	}
@@ -148,5 +167,15 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(code), code)
 		return
 	}
-	a.respond(w, r, route)
+	kind, id = "route", route.ID
+	if route.Action.Type == "file" || route.Action.Type == "directory" {
+		selected := a.fileResponse(w, r)
+		if selected == nil {
+			kind, id = "", ""
+		} else {
+			id = selected.ID
+		}
+	} else {
+		a.respond(w, r, route)
+	}
 }

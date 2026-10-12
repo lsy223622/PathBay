@@ -1,0 +1,19 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Collect verified CI artifacts for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run=$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --status success --json databaseId --jq '.[0].databaseId')
+          test -n "$run"
+          gh run download "$run" --pattern 'pathbay-*' --dir artifacts
+          gh release create "$GITHUB_REF_NAME" artifacts/*/* --verify-tag --generate-notes

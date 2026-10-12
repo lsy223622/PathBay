@@ -96,3 +96,18 @@ func TestPersistenceAndFailedSave(t *testing.T) {
 		t.Fatal(w.Code, w.Body.String())
 	}
 }
+
+func TestHeadErrorsHaveNoBody(t *testing.T) {
+	a, err := Open(Options{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	for _, path := range []string{"/missing", "/ip", "/bad%5Cpath"} {
+		w := httptest.NewRecorder()
+		a.ServeHTTP(w, httptest.NewRequest("HEAD", path, nil))
+		if w.Body.Len() != 0 {
+			t.Errorf("%s HEAD body: %q", path, w.Body.String())
+		}
+	}
+}

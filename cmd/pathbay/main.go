@@ -43,17 +43,24 @@ func main() {
 	}
 	server := &http.Server{Addr: *listen, Handler: a, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
 	done := make(chan os.Signal, 1)
+	shutdownDone := make(chan struct{})
 	signal.Notify(done, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-done
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_ = server.Shutdown(ctx)
+		if err := server.Shutdown(ctx); err != nil {
+			log.Printf("request shutdown: %v", err)
+			_ = server.Close()
+		}
+		close(shutdownDone)
 	}()
 	log.Printf("PathBay listening on %s", *listen)
 	err = server.ListenAndServe()
 	if err != http.ErrServerClosed {
 		log.Print(err)
+	} else {
+		<-shutdownDone
 	}
 	if e := a.Close(); e != nil {
 		log.Print(e)

@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -73,5 +74,49 @@ func TestFileResponsesAndReplacement(t *testing.T) {
 	}
 	if _, err = os.Stat(filepath.Join(root, "a.txt")); err != nil {
 		t.Fatal("deleted external file")
+	}
+}
+
+func TestConcurrentFileActionChange(t *testing.T) {
+	a, err := Open(Options{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	file := filepath.Join(t.TempDir(), "a.txt")
+	os.WriteFile(file, []byte("file"), 0600)
+	route := Route{ID: "changing", Path: "/change", Method: "GET", Match: "exact", Enabled: true, Action: Action{Type: "file", Source: "local", FilePath: file}}
+	c := a.Config()
+	c.Routes = []Route{route}
+	a.Save(c)
+	var group sync.WaitGroup
+	failures := make(chan int, 1000)
+	for i := 0; i < 8; i++ {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			for j := 0; j < 200; j++ {
+				w := httptest.NewRecorder()
+				a.ServeHTTP(w, httptest.NewRequest("GET", "/change", nil))
+				if w.Code != 200 {
+					failures <- w.Code
+				}
+			}
+		}()
+	}
+	for i := 0; i < 80; i++ {
+		c = a.Config()
+		c.Routes[0].Action = Action{Type: "text", Content: "text"}
+		if i%2 == 0 {
+			c.Routes[0] = route
+		}
+		if err = a.Save(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	group.Wait()
+	close(failures)
+	for code := range failures {
+		t.Fatalf("configuration change caused status %d", code)
 	}
 }
