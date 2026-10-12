@@ -4,11 +4,14 @@ on:
     tags: ['v*']
 permissions:
   contents: write
+  actions: read
+  packages: write
 jobs:
   release:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7.0.1
+      - uses: docker/setup-buildx-action@v4.4.1
       - name: Collect verified CI artifacts for this commit
         env:
           GH_TOKEN: ${{ github.token }}
@@ -16,4 +19,24 @@ jobs:
           run=$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --status success --json databaseId --jq '.[0].databaseId')
           test -n "$run"
           gh run download "$run" --pattern 'pathbay-*' --dir artifacts
-          gh release create "$GITHUB_REF_NAME" artifacts/*/* --verify-tag --generate-notes
+          for directory in artifacts/*; do
+            (cd "$directory" && sha256sum -c ./*.sha256)
+          done
+      - name: Publish verified multi-platform image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          for arch in amd64 arm64; do
+            docker load -i "artifacts/pathbay-image-$arch/pathbay-image-linux-$arch.tar.gz"
+            test "$(docker image inspect "pathbay:ci-$arch" --format '{{.Os}}/{{.Architecture}}')" = "linux/$arch"
+            test "$(docker image inspect "pathbay:ci-$arch" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+            docker tag "pathbay:ci-$arch" "$image:$GITHUB_REF_NAME-$arch"
+            docker push "$image:$GITHUB_REF_NAME-$arch"
+          done
+          docker buildx imagetools create -t "$image:$GITHUB_REF_NAME" "$image:$GITHUB_REF_NAME-amd64" "$image:$GITHUB_REF_NAME-arm64"
+      - name: Publish binary release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" artifacts/pathbay-linux-*/* artifacts/pathbay-windows-*/* --verify-tag --generate-notes

@@ -36,28 +36,67 @@ jobs:
         with:
           context: .
           platforms: linux/${{ matrix.arch }}
-          target: binary
-          outputs: type=local,dest=out
+          load: true
+          tags: pathbay:ci-${{ matrix.arch }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
       - run: |
-          chmod +x out/pathbay
-          docker buildx build --platform linux/${{ matrix.arch }} --load -t pathbay:ci .
-          docker run --rm --platform linux/${{ matrix.arch }} pathbay:ci --help
-          container=$(docker run -d --platform linux/${{ matrix.arch }} -p 127.0.0.1:7284:7284 pathbay:ci)
-          trap 'docker rm -f "$container" >/dev/null' EXIT
-          curl --retry 15 --retry-all-errors --retry-delay 1 -fsS http://127.0.0.1:7284/admin/api/v1/session | jq -e '.initialized == false'
+          image=pathbay:ci-${{ matrix.arch }}
+          mkdir out
+          container=$(docker create --platform linux/${{ matrix.arch }} "$image")
+          docker cp "$container:/usr/local/bin/pathbay" out/pathbay
+          docker rm "$container"
+          docker run --rm --platform linux/${{ matrix.arch }} "$image" --help
+          export PATHBAY_IMAGE="$image" PATHBAY_TZ=Asia/Shanghai PATHBAY_DATA_DIR="$RUNNER_TEMP/pathbay-data"
+          mkdir -p "$PATHBAY_DATA_DIR"
+          sudo chown 1000:1000 "$PATHBAY_DATA_DIR"
+          printf 'services:\n  pathbay:\n    platform: linux/%s\n' '${{ matrix.arch }}' > "$RUNNER_TEMP/platform.yaml"
+          compose=(docker compose -p pathbay-ci -f compose.yaml -f "$RUNNER_TEMP/platform.yaml")
+          trap '"${compose[@]}" down' EXIT
+          "${compose[@]}" config --quiet
+          "${compose[@]}" up -d
+          curl --retry 15 --retry-all-errors --retry-delay 1 --max-time 5 -fsS http://127.0.0.1:7284/admin/api/v1/session | jq -e '.initialized == false'
           password=$(openssl rand -base64 32)
-          status=$(jq -n --arg password "$password" '{username:"ci-test",password:$password}' | curl -sS -o /tmp/pathbay-setup.json -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:7284/admin/api/v1/setup)
+          status=$(jq -n --arg password "$password" '{username:"ci-test",password:$password}' | curl -sS -c /tmp/pathbay.cookies -o /tmp/pathbay-setup.json -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:7284/admin/api/v1/setup)
           test "$status" = 201 || { jq '.error' /tmp/pathbay-setup.json; exit 1; }
+          csrf=$(jq -r '.csrf' /tmp/pathbay-setup.json)
+          curl -fsS -b /tmp/pathbay.cookies -H "X-CSRF-Token: $csrf" -H 'Content-Type: application/json' -X PATCH --data '{"ip":true,"time":true}' http://127.0.0.1:7284/admin/api/v1/builtins > /dev/null
+          test "$(curl -fsS -H 'X-Real-IP: 198.51.100.42' http://127.0.0.1:7284/ip)" = 198.51.100.42
+          curl -fsS -b /tmp/pathbay.cookies http://127.0.0.1:7284/admin/api/v1/stats/summary | jq -e '.timezone == "Asia/Shanghai"'
+          jq -n --arg password "$password" '{username:"ci-test",password:$password}' | curl -fsS -D /tmp/pathbay.headers -o /dev/null -H 'X-Forwarded-Proto: https' -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:7284/admin/api/v1/login
+          grep -qi '^Set-Cookie:.*; Secure' /tmp/pathbay.headers
+          curl -fsS -b /tmp/pathbay.cookies -H "X-CSRF-Token: $csrf" -H 'Content-Type: application/json' --data '{"path":"/ci/file","method":"GET","match":"exact","enabled":true,"action":{"type":"file","source":"managed"}}' http://127.0.0.1:7284/admin/api/v1/routes > /tmp/pathbay-route.json
+          route=$(jq -r '.id' /tmp/pathbay-route.json)
+          printf 'persistent upload' > /tmp/pathbay-upload.txt
+          curl -fsS -b /tmp/pathbay.cookies -H "X-CSRF-Token: $csrf" -X PUT -F 'file=@/tmp/pathbay-upload.txt' "http://127.0.0.1:7284/admin/api/v1/routes/$route/file" > /dev/null
+          container=$("${compose[@]}" ps -q pathbay)
+          docker commit --change 'LABEL io.pathbay.ci.update=true' "$container" pathbay:ci-updated-${{ matrix.arch }}
+          test "$(docker image inspect pathbay:ci-updated-${{ matrix.arch }} --format '{{.Id}}')" != "$(docker image inspect "$image" --format '{{.Id}}')"
+          export PATHBAY_IMAGE=pathbay:ci-updated-${{ matrix.arch }} PATHBAY_TZ=UTC
+          "${compose[@]}" up -d --force-recreate
+          test "$("${compose[@]}" ps -q pathbay)" != "$container"
+          curl --retry 15 --retry-all-errors --retry-delay 1 --max-time 5 -fsS http://127.0.0.1:7284/ci/file | cmp - /tmp/pathbay-upload.txt
+          jq -n --arg password "$password" '{username:"ci-test",password:$password}' | curl -fsS -c /tmp/pathbay.cookies -o /tmp/pathbay-login.json -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:7284/admin/api/v1/login
+          curl -fsS -b /tmp/pathbay.cookies http://127.0.0.1:7284/admin/api/v1/stats/summary | jq -e '.timezone == "Asia/Shanghai"'
           tar -czf pathbay-linux-${{ matrix.arch }}.tar.gz -C out pathbay -C "$GITHUB_WORKSPACE" README.md LICENSE
           sha256sum pathbay-linux-${{ matrix.arch }}.tar.gz > pathbay-linux-${{ matrix.arch }}.sha256
+          docker save "$image" | gzip > pathbay-image-linux-${{ matrix.arch }}.tar.gz
+          sha256sum pathbay-image-linux-${{ matrix.arch }}.tar.gz > pathbay-image-linux-${{ matrix.arch }}.sha256
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: pathbay-linux-${{ matrix.arch }}
           path: |
             pathbay-linux-${{ matrix.arch }}.tar.gz
             pathbay-linux-${{ matrix.arch }}.sha256
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: pathbay-image-${{ matrix.arch }}
+          path: |
+            pathbay-image-linux-${{ matrix.arch }}.tar.gz
+            pathbay-image-linux-${{ matrix.arch }}.sha256
   windows:
     needs: test
     runs-on: windows-latest
@@ -87,3 +126,23 @@ jobs:
           path: |
             pathbay-windows-amd64.zip
             pathbay-windows-amd64.sha256
+  release-inputs:
+    needs: [linux, windows]
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Verify release downloads and image platforms
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --pattern 'pathbay-*' --dir artifacts
+          for directory in artifacts/*; do
+            (cd "$directory" && sha256sum -c ./*.sha256)
+          done
+          for arch in amd64 arm64; do
+            docker load -i "artifacts/pathbay-image-$arch/pathbay-image-linux-$arch.tar.gz"
+            test "$(docker image inspect "pathbay:ci-$arch" --format '{{.Os}}/{{.Architecture}}')" = "linux/$arch"
+            test "$(docker image inspect "pathbay:ci-$arch" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+          done

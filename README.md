@@ -104,7 +104,68 @@ docker run --name pathbay -p 127.0.0.1:7284:7284 -v "$PWD/data:/data" -e TZ=Asia
 Linux amd64 is the primary target. CI also builds Linux arm64 and Windows amd64.
 Windows initialization maps the system time zone using the CLDR default-region
 mapping and rejects custom/unknown rules. CI archives include SHA-256 checksums;
-tag releases reuse successful CI artifacts for that exact commit.
+tag releases reuse successful CI binaries and Docker images for that exact commit.
+CI provides `pathbay-image-amd64` and `pathbay-image-arm64` artifacts containing
+loadable image archives and checksums. They can be tested with `docker load -i`.
+After a version tag is published, the verified images are available as
+`ghcr.io/lsy223622/pathbay:<version>` for Linux amd64 and arm64, with
+`<version>-amd64` and `<version>-arm64` tags for individual architectures.
+Push a version tag only after CI for the same commit has succeeded and its
+artifacts are still available. CI itself does not publish registry images.
+
+### 1Panel Compose deployment
+
+Use `compose.yaml` in a Linux 1Panel Compose project and set its environment
+variables from `.env.example`. The example `v1.0.0` is a version placeholder;
+replace it with an actually published tag. Set `PATHBAY_TZ` explicitly before
+creating the administrator. Initialization saves that zone's rules in the data
+directory; later environment changes do not change an existing instance's zone.
+
+The Compose service uses host networking and listens only on
+`127.0.0.1:7284`. This matches OpenResty running on the host or with host
+networking: its connection reaches PathBay from loopback, which is the explicit
+trusted proxy range. Point the site's reverse proxy to that address and use the
+Nginx headers and transfer settings above. A proxy in a separate bridge network
+cannot reach this loopback listener; configure that proxy to use host networking
+before using this Compose setup. For the dedicated test site, set
+`PATHBAY_PORT=7285`.
+
+The bind mount preserves the complete instance data when a container or image is
+replaced. It runs as UID/GID 1000 by default. Prepare the data directory in the
+Compose project's working directory before starting it:
+
+```sh
+cp .env.example .env
+# Edit PATHBAY_IMAGE and PATHBAY_TZ in .env.
+mkdir -p data
+sudo chown 1000:1000 data
+docker compose config --quiet
+docker compose up -d
+```
+
+For an absolute `PATHBAY_DATA_DIR` or different `PATHBAY_UID`/`PATHBAY_GID`, prepare
+that directory with matching ownership instead. Mount any external local files
+or static directories at the same absolute container paths referenced by their
+routes, preferably read-only. In 1Panel, paste the Compose file and environment
+values into the project and use its start/recreate controls.
+
+To update, set `PATHBAY_IMAGE` to the new explicit version and pull it first.
+Then stop normally, back up the entire data directory and recreate:
+
+```sh
+# Update PATHBAY_IMAGE in .env.
+docker compose pull
+docker compose stop
+cp -a data "data-backup-$(date +%Y%m%d-%H%M%S)"
+docker compose up -d
+```
+
+Use the configured data directory in the backup command if it is not `./data`.
+Keep the previous image and backup for recovery; restoring requires a stopped
+instance. Log in again after recreation. GHCR packages initially default to
+private: after the first release, make the package public for anonymous pulls,
+or authenticate 1Panel's registry access with a token limited to `read:packages`.
+See [GitHub's Container registry documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
 
 Time-zone data comes from Go's IANA archive; Windows mappings come from
 [Unicode CLDR 48](https://github.com/unicode-org/cldr/tree/release-48), under the
