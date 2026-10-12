@@ -11,7 +11,12 @@ async function api(resource, method = 'GET', body) {
   if (!response.ok) { if (response.status === 401 && resource !== 'login') await start(); throw new Error(data?.error?.message || 'Request failed'); }
   return data;
 }
-function notice(message) { $('notice').textContent = message; $('notice').hidden = !message; }
+let noticeTimer;
+function notice(message) {
+  clearTimeout(noticeTimer);
+  const element = $('notice'); element.textContent = message; element.hidden = !message;
+  if (message) noticeTimer = setTimeout(() => { element.hidden = true; }, 4000);
+}
 function errorIn(form, error) { form.querySelector('.form-error').textContent = error.message; }
 function cell(row, text) { const element = document.createElement('td'); element.textContent = text ?? '—'; row.append(element); return element; }
 function button(text, handler, style = 'quiet') { const element = document.createElement('button'); element.type = 'button'; element.className = style; element.textContent = text; element.onclick = async () => { try { await handler(); } catch (e) { notice(e.message); } }; return element; }
@@ -38,7 +43,7 @@ async function showView(view) {
 async function loadRoutes() {
   const [data, totals] = await Promise.all([api(`routes?page=${routePage}`), summary()]); routes = data.items; const counts = new Map(totals.filter(v=>v.kind==='route').map(v=>[v.hit_id,v])); $('route-list').replaceChildren(); $('routes-empty').hidden = data.total !== 0;
   for (const route of routes) {
-    const row = document.createElement('tr'); const pathCell = cell(row,''); const code = document.createElement('code'); code.textContent = route.path; pathCell.append(code); const method = document.createElement('small'); method.textContent = route.method; pathCell.append(method);
+    const row = document.createElement('tr'); const pathCell = cell(row,''); const link = document.createElement('a'); link.className = 'route-path'; link.textContent = route.path; link.href = location.origin + encodeURI(route.path).replaceAll('?','%3F').replaceAll('#','%23'); link.target = '_blank'; link.rel = 'noopener'; pathCell.append(link); const method = document.createElement('small'); method.textContent = route.method; pathCell.append(method);
     cell(row, route.match === 'exact' ? 'Exact' : route.boundary ? 'Path prefix' : 'Prefix'); cell(row, {redirect:'Redirect',text:route.action.format==='html'?'HTML':'Text',json:'JSON',file:'File',directory:'Static directory'}[route.action.type]);
     cell(row, route.action.target || route.action.content || route.action.file_name || route.action.file_path || 'Upload a file'); cell(row, counts.get(route.id)?.hits || 0); cell(row, counts.get(route.id)?.last_display || '—');
     const status = cell(row,''); const toggle = button(route.enabled?'Enabled':'Disabled',async()=>{await api('routes/'+route.id,'PATCH',{enabled:!route.enabled});await loadRoutes();},'badge'+(route.enabled?'':' off')); status.append(toggle); cell(row,'').append(button('Edit',()=>openRoute(route))); $('route-list').append(row);
@@ -55,6 +60,7 @@ function updateAction() {
 function openRoute(route = null) {
   editing = route; const f = $('route-form'); f.reset(); f.querySelector('.form-error').textContent=''; $('route-title').textContent = route ? 'Edit route' : 'New route'; $('delete-route').hidden = !route;
   $('managed-info').textContent='';
+  $('upload-name').textContent='No file selected';
   if (route) {
     for (const key of ['method','match','enabled','boundary']) { const el = f.elements[key]; if (el.type==='checkbox') el.checked=route[key]; else el.value=route[key]; }
     f.elements.path.value = encodeURI(route.path).replaceAll('?','%3F').replaceAll('#','%23');
@@ -99,7 +105,14 @@ async function loadActivity() {
   $('trend-label').textContent=daily.length?`${daily[0].day} – ${daily.at(-1).day} · ${daily.reduce((sum,v)=>sum+v.hits,0)} hits`:'No recorded hits yet.';await loadLogs(false);
 }
 async function loadLogs(more=false) {
-  const q=new URLSearchParams({limit:'50',hit_id:$('log-route').value});for(const name of ['from','to'])if($('log-'+name).value)q.set(name,new Date($('log-'+name).value).toISOString());if(more&&logCursor)q.set('cursor',logCursor);
+  const q=new URLSearchParams({limit:'50',hit_id:$('log-route').value});
+  for (const name of ['from','to']) {
+    const value = $('log-'+name).value.trim(); if (!value) continue;
+    const parts = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/.exec(value), date = new Date(value.replace(' ','T'));
+    if (!parts || !Number.isFinite(date.getTime()) || [date.getFullYear(),date.getMonth()+1,date.getDate(),date.getHours(),date.getMinutes()].some((part,index)=>part!==Number(parts[index+1]))) throw new Error('Enter a valid date and time (YYYY-MM-DD HH:mm).');
+    q.set(name,date.toISOString());
+  }
+  if(more&&logCursor)q.set('cursor',logCursor);
   const data=await api('stats/logs?'+q);if(!more)$('log-list').replaceChildren();for(const log of data.items){const row=document.createElement('tr');for(const value of [log.time_display,routes.find(v=>v.id===log.hit_id)?.path||log.hit_id||'Unmatched',log.path,log.method,log.status,log.ip,log.user_agent,log.referer])cell(row,value);$('log-list').append(row);}logCursor=data.next_cursor;$('logs-next').hidden=!logCursor;
 }
 document.querySelectorAll('nav button').forEach(element=>element.onclick=()=>showView(element.dataset.view).catch(e=>notice(e.message)));
@@ -114,6 +127,10 @@ $('settings-form').elements.retention.onchange=event=>$('retention-label').hidde
 $('settings-form').onsubmit=async event=>{event.preventDefault();const f=event.currentTarget;const fields={};for(const key of Object.keys(fieldNames))fields[key]=f.elements[key].checked;try{await api('settings','PATCH',{detailed_logs:f.elements.detailed_logs.checked,log_unmatched:f.elements.log_unmatched.checked,fields,retention_days:f.elements.retention.value==='forever'?0:Number(f.elements.retention_days.value)});notice('Settings saved.');}catch(e){errorIn(f,e);}};
 $('token-form').onsubmit=async event=>{event.preventDefault();const f=event.currentTarget;try{const token=await api('tokens','POST',{name:f.elements.name.value});$('token-value').value=token.token;$('token-secret').hidden=false;f.reset();await loadTokens();}catch(e){notice(e.message);}};
 $('dismiss-token').onclick=()=>{$('token-value').value='';$('token-secret').hidden=true;};
+$('choose-import').onclick=()=>$('import-file').click();
+$('import-file').onchange=()=>$('import-name').textContent=$('import-file').files[0]?.name||'No file selected';
+$('choose-upload').onclick=()=>$('route-form').elements.upload.click();
+$('route-form').elements.upload.onchange=event=>$('upload-name').textContent=event.target.files[0]?.name||'No file selected';
 $('password-form').onsubmit=async event=>{event.preventDefault();const f=event.currentTarget;try{await api('password','POST',{current_password:f.elements.current_password.value,password:f.elements.password.value});f.reset();await start();notice('Password changed. Sign in with your new password.');}catch(e){errorIn(f,e);}};
 $('import-config').onclick=async()=>{try{const file=$('import-file').files[0];if(!file)throw new Error('Choose a configuration JSON file.');if(file.size>16*1024*1024)throw new Error('Import exceeds 16 MiB.');const raw=await file.text();const response=await fetch('/admin/api/v1/config/import',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:raw});const data=await response.json();if(!response.ok)throw new Error(data.error.message);$('import-result').textContent='Configuration imported.';await loadSettings();}catch(e){$('import-result').textContent=e.message;}};
 $('refresh-activity').onclick=()=>loadActivity().catch(e=>notice(e.message));$('log-filter').onsubmit=event=>{event.preventDefault();loadLogs().catch(e=>notice(e.message));};$('logs-next').onclick=()=>loadLogs(true).catch(e=>notice(e.message));
