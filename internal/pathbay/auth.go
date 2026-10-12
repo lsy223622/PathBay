@@ -147,13 +147,16 @@ func (a *App) CreateToken(name string) (Token, string, error) {
 	}
 	value := secret()
 	t := Token{ID: newID(), Name: name, Created: time.Now().UnixMilli(), Digest: tokenDigest(value)}
+	values := map[string]Token{}
+	for digest, existing := range *a.tokens.Load() {
+		values[digest] = existing
+	}
+	values[t.Digest] = t
 	_, err := a.db.Exec("INSERT INTO tokens VALUES(?,?,?,?)", t.ID, t.Name, t.Created, t.Digest)
 	if err != nil {
 		return Token{}, "", err
 	}
-	if err = a.loadTokens(); err != nil {
-		return Token{}, "", err
-	}
+	a.tokens.Store(&values)
 	return t, value, nil
 }
 func (a *App) ListTokens() []Token {
@@ -166,6 +169,12 @@ func (a *App) ListTokens() []Token {
 func (a *App) RevokeToken(id string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	values := map[string]Token{}
+	for digest, existing := range *a.tokens.Load() {
+		if existing.ID != id {
+			values[digest] = existing
+		}
+	}
 	res, err := a.db.Exec("DELETE FROM tokens WHERE id=?", id)
 	if err != nil {
 		return err
@@ -174,7 +183,8 @@ func (a *App) RevokeToken(id string) error {
 	if n == 0 {
 		return sql.ErrNoRows
 	}
-	return a.loadTokens()
+	a.tokens.Store(&values)
+	return nil
 }
 func (a *App) ResetPassword(password string) error {
 	hash, err := a.hashPassword(password)

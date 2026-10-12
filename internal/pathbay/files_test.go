@@ -2,11 +2,13 @@ package pathbay
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestFileResponsesAndReplacement(t *testing.T) {
@@ -118,5 +120,130 @@ func TestConcurrentFileActionChange(t *testing.T) {
 	close(failures)
 	for code := range failures {
 		t.Fatalf("configuration change caused status %d", code)
+	}
+}
+
+func TestChangingFileSourceAndAction(t *testing.T) {
+	a, err := Open(Options{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	c := a.Config()
+	c.Routes = []Route{{ID: "change-file", Path: "/f", Method: "GET", Match: "exact", Enabled: true, Action: Action{Type: "file", Source: "managed"}}}
+	a.Save(c)
+	a.Upload("change-file", "old.html", bytes.NewBufferString("old"))
+	old := a.Config().Routes[0].Action.FilePath
+	_, token, err := a.CreateToken("source-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "new.txt")
+	os.WriteFile(file, []byte("new"), 0600)
+	body, _ := json.Marshal(map[string]any{"action": map[string]any{"source": "local", "file_path": file}})
+	w := apiTest(a, "PATCH", "routes/change-file", string(body), "", "", token)
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	a.ServeHTTP(w, httptest.NewRequest("GET", "/f", nil))
+	if w.Header().Get("Content-Type") != "text/plain; charset=utf-8" {
+		t.Fatal("kept old MIME", w.Header())
+	}
+	a.cleanFiles()
+	if _, err = os.Stat(filepath.Join(a.options.DataDir, "files", old)); !os.IsNotExist(err) {
+		t.Fatal("source change retained managed file")
+	}
+	a.Upload("change-file", "again.txt", bytes.NewBufferString("again"))
+	old = a.Config().Routes[0].Action.FilePath
+	w = apiTest(a, "PATCH", "routes/change-file", `{"action":{"type":"text","content":"text"}}`, "", "", token)
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	a.cleanFiles()
+	if _, err = os.Stat(filepath.Join(a.options.DataDir, "files", old)); !os.IsNotExist(err) {
+		t.Fatal("action change retained managed file", err)
+	}
+	body, _ = json.Marshal(map[string]any{"action": map[string]any{"type": "directory", "file_path": filepath.Dir(file)}})
+	w = apiTest(a, "PATCH", "routes/change-file", string(body), "", "", token)
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	w = apiTest(a, "PATCH", "routes/change-file", `{"action":{"type":"file","source":"managed","file_path":""}}`, "", "", token)
+	if w.Code != 200 {
+		t.Fatal("cannot choose managed source", w.Code, w.Body.String())
+	}
+	if err = a.Upload("change-file", "last.txt", bytes.NewBufferString("last")); err != nil {
+		t.Fatal(err)
+	}
+	old = a.Config().Routes[0].Action.FilePath
+	body, _ = json.Marshal(map[string]any{"action": map[string]any{"type": "directory", "file_path": filepath.Dir(file)}})
+	w = apiTest(a, "PATCH", "routes/change-file", string(body), "", "", token)
+	if w.Code != 200 {
+		t.Fatal("cannot choose directory", w.Code, w.Body.String())
+	}
+	a.cleanFiles()
+	if _, err = os.Stat(filepath.Join(a.options.DataDir, "files", old)); !os.IsNotExist(err) {
+		t.Fatal("directory change retained upload")
+	}
+}
+
+type pausedFileWriter struct {
+	*httptest.ResponseRecorder
+	entered, release chan struct{}
+	once             sync.Once
+}
+
+func (w *pausedFileWriter) Write(b []byte) (int, error) {
+	w.once.Do(func() { close(w.entered); <-w.release })
+	return w.ResponseRecorder.Write(b)
+}
+func TestManagedReadSurvivesReplacement(t *testing.T) {
+	a, err := Open(Options{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	c := a.Config()
+	c.Routes = []Route{{ID: "active", Path: "/active", Method: "GET", Match: "exact", Enabled: true, Action: Action{Type: "file", Source: "managed"}}}
+	a.Save(c)
+	original := bytes.Repeat([]byte("a"), 1<<20)
+	replacement := bytes.Repeat([]byte("b"), 1<<20)
+	a.Upload("active", "original.txt", bytes.NewReader(original))
+	old := a.Config().Routes[0].Action.FilePath
+	w := &pausedFileWriter{ResponseRecorder: httptest.NewRecorder(), entered: make(chan struct{}), release: make(chan struct{})}
+	finished := make(chan struct{})
+	go func() { a.ServeHTTP(w, httptest.NewRequest("GET", "/active", nil)); close(finished) }()
+	<-w.entered
+	changed := make(chan error, 1)
+	go func() { changed <- a.Upload("active", "replacement.txt", bytes.NewReader(replacement)) }()
+	select {
+	case err = <-changed:
+	case <-time.After(2 * time.Second):
+		close(w.release)
+		<-finished
+		t.Fatal("replacement waited for download")
+	}
+	if err != nil {
+		close(w.release)
+		<-finished
+		t.Fatal(err)
+	}
+	a.cleanFiles()
+	if _, err = os.Stat(filepath.Join(a.options.DataDir, "files", old)); err != nil {
+		close(w.release)
+		<-finished
+		t.Fatal("active file retired early", err)
+	}
+	next := httptest.NewRecorder()
+	a.ServeHTTP(next, httptest.NewRequest("GET", "/active", nil))
+	close(w.release)
+	<-finished
+	if !bytes.Equal(w.Body.Bytes(), original) || !bytes.Equal(next.Body.Bytes(), replacement) {
+		t.Fatal("download mixed versions")
+	}
+	a.cleanFiles()
+	if _, err = os.Stat(filepath.Join(a.options.DataDir, "files", old)); !os.IsNotExist(err) {
+		t.Fatal("finished file not cleaned")
 	}
 }

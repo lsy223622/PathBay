@@ -9,7 +9,7 @@ func (a *App) respond(w http.ResponseWriter, r *http.Request, route *Route) {
 	v := route.Action
 	switch v.Type {
 	case "redirect":
-		target, _ := url.Parse(v.Target)
+		target := *route.target
 		if v.PreserveQuery == nil || *v.PreserveQuery {
 			values, err := url.ParseQuery(r.URL.RawQuery)
 			if err != nil {
@@ -33,7 +33,7 @@ func (a *App) respond(w http.ResponseWriter, r *http.Request, route *Route) {
 		}
 		w.Header().Set("Content-Type", ct)
 		if r.Method != "HEAD" {
-			_, _ = w.Write([]byte(v.Content))
+			_, _ = w.Write(route.body)
 		}
 	}
 }

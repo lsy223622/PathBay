@@ -17,4 +17,3 @@ WORKDIR /data
 EXPOSE 7284
 ENTRYPOINT ["pathbay"]
 CMD ["--listen", "0.0.0.0:7284", "--data-dir", "/data"]
-

@@ -394,9 +394,9 @@ func (a *App) routeAPI(w http.ResponseWriter, r *http.Request, endpoint string) 
 			}
 			route.Path = p
 		}
-		if route.Action.Source == "managed" {
+		if route.Action.Type == "file" && route.Action.Source == "managed" {
 			previous := ""
-			if index >= 0 {
+			if index >= 0 && c.Routes[index].Action.Type == "file" && c.Routes[index].Action.Source == "managed" {
 				previous = c.Routes[index].Action.FilePath
 			}
 			if route.Action.FilePath != previous {

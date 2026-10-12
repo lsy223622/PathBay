@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"path/filepath"
 	"strings"
 	"unicode"
 )
@@ -25,6 +26,8 @@ type Action struct {
 	DownloadName  string `json:"download_name,omitempty"`
 }
 type Route struct {
+	body     []byte
+	target   *url.URL
 	ID       string `json:"id"`
 	Path     string `json:"path"`
 	Method   string `json:"method"`
@@ -121,10 +124,12 @@ func validateRoute(r *Route) error {
 		if r.Action.Format != "" && r.Action.Format != "text" && r.Action.Format != "html" {
 			return fmt.Errorf("invalid text format")
 		}
+		r.body = []byte(r.Action.Content)
 	case "json":
 		if !json.Valid([]byte(r.Action.Content)) {
 			return fmt.Errorf("invalid JSON content")
 		}
+		r.body = []byte(r.Action.Content)
 	case "redirect":
 		a := &r.Action
 		if a.Status == 0 {
@@ -145,6 +150,7 @@ func validateRoute(r *Route) error {
 		if _, e = url.ParseQuery(u.RawQuery); e != nil {
 			return fmt.Errorf("invalid target query")
 		}
+		r.target = u
 	case "file", "directory":
 		if r.Action.FilePath == "" && !(r.Action.Type == "file" && r.Action.Source == "managed") {
 			return fmt.Errorf("file path required")
@@ -157,6 +163,19 @@ func validateRoute(r *Route) error {
 		}
 	default:
 		return fmt.Errorf("invalid action type")
+	}
+	if r.Action.Type != "file" {
+		r.Action.Source = ""
+		r.Action.FileName = ""
+		r.Action.FileSize = 0
+		r.Action.Disposition = ""
+		r.Action.DownloadName = ""
+		if r.Action.Type != "directory" {
+			r.Action.FilePath = ""
+		}
+	} else if r.Action.Source == "local" {
+		r.Action.FileName = filepath.Base(r.Action.FilePath)
+		r.Action.FileSize = 0
 	}
 	return nil
 }

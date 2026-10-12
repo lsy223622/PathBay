@@ -145,11 +145,11 @@ func Open(o Options) (*App, error) {
 func (a *App) Config() Config      { return cloneConfig(a.snapshot.Load().Config) }
 func (a *App) Save(c Config) error { a.mu.Lock(); defer a.mu.Unlock(); return a.saveLocked(c) }
 func (a *App) saveLocked(c Config) error {
-	if err := validateFiles(c); err != nil {
-		return err
-	}
 	s, err := BuildSnapshot(c)
 	if err != nil {
+		return err
+	}
+	if err := validateFiles(s.Config); err != nil {
 		return err
 	}
 	tx, err := a.db.Begin()

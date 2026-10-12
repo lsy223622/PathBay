@@ -1,6 +1,7 @@
 package pathbay
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -64,5 +65,31 @@ func TestActionsAndBuiltin(t *testing.T) {
 	a.ServeHTTP(w, httptest.NewRequest("GET", "/json", nil))
 	if w.Code != 200 {
 		t.Fatal("public response used db")
+	}
+}
+
+type responseSink struct{ header http.Header }
+
+func (w *responseSink) Header() http.Header         { return w.header }
+func (w *responseSink) WriteHeader(int)             {}
+func (w *responseSink) Write(b []byte) (int, error) { return len(b), nil }
+func TestFixedResponseDoesNotCopyContentPerRequest(t *testing.T) {
+	a, err := Open(Options{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	c := a.Config()
+	c.Routes = []Route{{ID: "large-text", Path: "/text", Method: "GET", Match: "exact", Enabled: true, Action: Action{Type: "text", Content: strings.Repeat("x", 1<<20)}}}
+	a.Save(c)
+	r := httptest.NewRequest("GET", "/text", nil)
+	w := &responseSink{header: make(http.Header)}
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			a.ServeHTTP(w, r)
+		}
+	})
+	if result.AllocedBytesPerOp() > 64<<10 {
+		t.Fatalf("fixed response allocates %d bytes/request", result.AllocedBytesPerOp())
 	}
 }

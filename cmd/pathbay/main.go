@@ -65,4 +65,7 @@ func main() {
 	if e := a.Close(); e != nil {
 		log.Print(e)
 	}
+	if err != http.ErrServerClosed {
+		os.Exit(1)
+	}
 }

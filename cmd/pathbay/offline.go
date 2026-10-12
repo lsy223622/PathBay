@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/lsy223622/PathBay/internal/pathbay"
+	"golang.org/x/term"
 	"os"
 	"strings"
 )
@@ -37,12 +38,26 @@ func offline(args []string) bool {
 	switch args[0] + " " + args[1] {
 	case "password reset":
 		reader := bufio.NewReader(os.Stdin)
-		fmt.Fprint(os.Stderr, "New password: ")
-		first, _ := reader.ReadString('\n')
-		fmt.Fprint(os.Stderr, "Confirm password: ")
-		second, _ := reader.ReadString('\n')
-		first = strings.TrimRight(first, "\r\n")
-		second = strings.TrimRight(second, "\r\n")
+		read := func(prompt string) (string, error) {
+			fmt.Fprint(os.Stderr, prompt)
+			if term.IsTerminal(int(os.Stdin.Fd())) {
+				value, e := term.ReadPassword(int(os.Stdin.Fd()))
+				fmt.Fprintln(os.Stderr)
+				return string(value), e
+			}
+			value, e := reader.ReadString('\n')
+			return strings.TrimRight(value, "\r\n"), e
+		}
+		first, e := read("New password: ")
+		if e != nil {
+			err = e
+			break
+		}
+		second, e := read("Confirm password: ")
+		if e != nil {
+			err = e
+			break
+		}
 		if first != second {
 			err = fmt.Errorf("passwords differ")
 		} else {
