@@ -11,6 +11,7 @@ FROM scratch AS binary
 COPY --from=build /out/pathbay /pathbay
 
 FROM alpine:3.22 AS runtime
+ENV TZ=UTC
 RUN apk add --no-cache tzdata ca-certificates && mkdir /data
 COPY --from=build /out/pathbay /usr/local/bin/pathbay
 WORKDIR /data

@@ -147,7 +147,13 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.HasPrefix(p, "/admin/") {
-		a.admin(w, r)
+		if strings.HasPrefix(p, "/admin/api/v1/") && !(r.Method == "PUT" && strings.HasSuffix(p, "/file")) {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			http.TimeoutHandler(http.HandlerFunc(a.admin), 30*time.Second, `{"error":{"code":"service_unavailable","message":"management request timed out"}}`).ServeHTTP(w, r)
+		} else {
+			a.admin(w, r)
+		}
 		return
 	}
 	s := a.snapshot.Load()

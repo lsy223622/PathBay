@@ -206,6 +206,9 @@ func (a *App) publish(s *Snapshot) {
 	next := managedReferences(s)
 	a.snapshot.Store(s)
 	a.readMu.Lock()
+	for id := range next {
+		delete(a.retired, id)
+	}
 	for id := range old {
 		if !next[id] {
 			a.retired[id] = true

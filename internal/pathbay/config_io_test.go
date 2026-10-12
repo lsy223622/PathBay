@@ -2,6 +2,7 @@ package pathbay
 
 import (
 	"encoding/json"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -37,5 +38,33 @@ func TestImportAtomicAndStrict(t *testing.T) {
 	json.Unmarshal(exported, &data)
 	if data["version"] != float64(1) {
 		t.Fatal(data)
+	}
+}
+
+func TestConfigurationRoundTripEscapedDelimiters(t *testing.T) {
+	a, err := Open(Options{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	_, token, _ := a.CreateToken("path")
+	w := apiTest(a, "POST", "routes", `{"path":"/special%3Fpart%23fragment%25","method":"GET","match":"exact","action":{"type":"text","content":"same path"}}`, "", "", token)
+	if w.Code != 201 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	doc, err := a.ExportConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := a.Config()
+	c.Routes = nil
+	a.Save(c)
+	if err = a.ImportConfig(doc); err != nil {
+		t.Fatal("export cannot be imported", err)
+	}
+	w = httptest.NewRecorder()
+	a.ServeHTTP(w, httptest.NewRequest("GET", "/special%3Fpart%23fragment%25", nil))
+	if w.Code != 200 || w.Body.String() != "same path" {
+		t.Fatal("round trip changed path", w.Code, w.Body.String())
 	}
 }

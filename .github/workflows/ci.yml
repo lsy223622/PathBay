@@ -44,6 +44,12 @@ jobs:
           chmod +x out/pathbay
           docker buildx build --platform linux/${{ matrix.arch }} --load -t pathbay:ci .
           docker run --rm --platform linux/${{ matrix.arch }} pathbay:ci --help
+          container=$(docker run -d --platform linux/${{ matrix.arch }} -p 127.0.0.1:7284:7284 pathbay:ci)
+          trap 'docker rm -f "$container" >/dev/null' EXIT
+          curl --retry 15 --retry-connrefused --retry-delay 1 -fsS http://127.0.0.1:7284/admin/api/v1/session | jq -e '.initialized == false'
+          password=$(openssl rand -base64 32)
+          status=$(jq -n --arg password "$password" '{username:"ci-test",password:$password}' | curl -sS -o /tmp/pathbay-setup.json -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:7284/admin/api/v1/setup)
+          test "$status" = 201 || { jq '.error' /tmp/pathbay-setup.json; exit 1; }
           tar -czf pathbay-linux-${{ matrix.arch }}.tar.gz -C out pathbay -C "$GITHUB_WORKSPACE" README.md LICENSE
           sha256sum pathbay-linux-${{ matrix.arch }}.tar.gz > pathbay-linux-${{ matrix.arch }}.sha256
       - uses: actions/upload-artifact@v7.0.2

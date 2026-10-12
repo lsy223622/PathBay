@@ -1,18 +1,17 @@
 package pathbay
 
 import (
-	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/mattn/go-sqlite3"
 	"io"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
-	"time"
 )
 
 func jsonResponse(w http.ResponseWriter, code int, value any) {
@@ -69,11 +68,6 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Allow", "GET, HEAD, POST, PATCH, PUT, DELETE, OPTIONS")
 		w.WriteHeader(204)
 		return
-	}
-	if !(r.Method == "PUT" && strings.HasSuffix(endpoint, "/file")) {
-		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-		defer cancel()
-		r = r.WithContext(ctx)
 	}
 	csrf, authenticated := a.authenticate(r)
 	public := endpoint == "setup" || endpoint == "login" || endpoint == "session"
@@ -140,7 +134,12 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request) {
 			}
 			err = a.initializeAdmin(input.Username, hash)
 			if err != nil {
-				apiError(w, 409, "administrator already initialized")
+				var constraint sqlite3.Error
+				if errors.As(err, &constraint) && constraint.Code == sqlite3.ErrConstraint {
+					apiError(w, 409, "administrator already initialized")
+				} else {
+					apiError(w, 503, err.Error())
+				}
 				return
 			}
 			jsonResponse(w, 201, map[string]any{"csrf": a.newSession(w, r)})

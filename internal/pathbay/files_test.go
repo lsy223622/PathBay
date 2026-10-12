@@ -247,3 +247,84 @@ func TestManagedReadSurvivesReplacement(t *testing.T) {
 		t.Fatal("finished file not cleaned")
 	}
 }
+
+func TestImportReownsRetiringManagedFile(t *testing.T) {
+	a, err := Open(Options{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	c := a.Config()
+	c.Routes = []Route{{ID: "retiring", Path: "/retiring", Method: "GET", Match: "exact", Enabled: true, Action: Action{Type: "file", Source: "managed"}}}
+	a.Save(c)
+	a.Upload("retiring", "saved.txt", bytes.NewBufferString("saved content"))
+	export, err := a.ExportConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := &pausedFileWriter{ResponseRecorder: httptest.NewRecorder(), entered: make(chan struct{}), release: make(chan struct{})}
+	done := make(chan struct{})
+	go func() { a.ServeHTTP(w, httptest.NewRequest("GET", "/retiring", nil)); close(done) }()
+	<-w.entered
+	c = a.Config()
+	c.Routes = nil
+	if err = a.Save(c); err != nil {
+		close(w.release)
+		<-done
+		t.Fatal(err)
+	}
+	if err = a.ImportConfig(export); err != nil {
+		close(w.release)
+		<-done
+		t.Fatal(err)
+	}
+	close(w.release)
+	<-done
+	a.cleanFiles()
+	next := httptest.NewRecorder()
+	a.ServeHTTP(next, httptest.NewRequest("GET", "/retiring", nil))
+	if next.Code != 200 || next.Body.String() != "saved content" {
+		t.Fatal("retirement deleted imported file", next.Code, next.Body.String())
+	}
+}
+
+func TestImportProtectsManagedFileUntilCommit(t *testing.T) {
+	a, err := Open(Options{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	c := a.Config()
+	c.Routes = []Route{{ID: "waiting", Path: "/waiting", Method: "GET", Match: "exact", Enabled: true, Action: Action{Type: "file", Source: "managed"}}}
+	a.Save(c)
+	a.Upload("waiting", "file.txt", bytes.NewBufferString("protected"))
+	export, _ := a.ExportConfig()
+	c = a.Config()
+	c.Routes = nil
+	a.Save(c)
+	tx, err := a.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	waits := a.db.Stats().WaitCount
+	done := make(chan error, 1)
+	go func() { done <- a.ImportConfig(export) }()
+	deadline := time.Now().Add(time.Second)
+	for a.db.Stats().WaitCount == waits && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if a.db.Stats().WaitCount == waits {
+		t.Fatal("import did not reach commit preparation")
+	}
+	a.cleanFiles()
+	tx.Rollback()
+	if err = <-done; err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, httptest.NewRequest("GET", "/waiting", nil))
+	if w.Code != 200 || w.Body.String() != "protected" {
+		t.Fatal("cleanup raced import commit", w.Code, w.Body.String())
+	}
+}

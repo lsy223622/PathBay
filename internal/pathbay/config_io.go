@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,7 +70,7 @@ func checkJSONKeys(b []byte) error {
 func (a *App) ExportConfig() ([]byte, error) {
 	c := a.Config()
 	for i := range c.Routes {
-		c.Routes[i].Path = strings.ReplaceAll(c.Routes[i].Path, "%", "%25")
+		c.Routes[i].Path = (&url.URL{Path: c.Routes[i].Path}).EscapedPath()
 	}
 	settings, _ := json.Marshal(c.Settings)
 	return json.MarshalIndent(configDocument{Version: 1, Routes: c.Routes, Builtins: c.Builtins, Settings: settings}, "", "  ")
@@ -106,6 +107,17 @@ func (a *App) ImportConfig(b []byte) error {
 			if v.FilePath == "" || filepath.Base(v.FilePath) != v.FilePath || strings.ContainsAny(v.FilePath, "/\\") || v.FilePath == "." || v.FilePath == ".." {
 				return fmt.Errorf("invalid managed reference")
 			}
+			a.readMu.Lock()
+			a.readers[v.FilePath]++
+			a.readMu.Unlock()
+			defer func() {
+				a.readMu.Lock()
+				a.readers[v.FilePath]--
+				if a.readers[v.FilePath] == 0 {
+					delete(a.readers, v.FilePath)
+				}
+				a.readMu.Unlock()
+			}()
 			root, err := os.OpenRoot(filepath.Join(a.options.DataDir, "files"))
 			if err != nil {
 				return err

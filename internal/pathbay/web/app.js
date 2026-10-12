@@ -15,7 +15,6 @@ function notice(message) { $('notice').textContent = message; $('notice').hidden
 function errorIn(form, error) { form.querySelector('.form-error').textContent = error.message; }
 function cell(row, text) { const element = document.createElement('td'); element.textContent = text ?? '—'; row.append(element); return element; }
 function button(text, handler, style = 'quiet') { const element = document.createElement('button'); element.type = 'button'; element.className = style; element.textContent = text; element.onclick = async () => { try { await handler(); } catch (e) { notice(e.message); } }; return element; }
-function date(value) { if (!value) return '—'; try { return new Intl.DateTimeFormat(undefined,{timeZone:instanceZone,dateStyle:'short',timeStyle:'medium'}).format(new Date(value)); } catch { return new Date(value).toISOString(); } }
 async function start() {
   const state = await api('session'); csrf = state.csrf; initialized = state.initialized;
   $('app').hidden = !state.authenticated; $('account').hidden = !state.authenticated; $('auth').hidden = state.authenticated;
@@ -41,7 +40,7 @@ async function loadRoutes() {
   for (const route of routes) {
     const row = document.createElement('tr'); const pathCell = cell(row,''); const code = document.createElement('code'); code.textContent = route.path; pathCell.append(code); const method = document.createElement('small'); method.textContent = route.method; pathCell.append(method);
     cell(row, route.match === 'exact' ? 'Exact' : route.boundary ? 'Path prefix' : 'Prefix'); cell(row, {redirect:'Redirect',text:route.action.format==='html'?'HTML':'Text',json:'JSON',file:'File',directory:'Static directory'}[route.action.type]);
-    cell(row, route.action.target || route.action.content || route.action.file_name || route.action.file_path || 'Upload a file'); cell(row, counts.get(route.id)?.hits || 0); cell(row, date(counts.get(route.id)?.last));
+    cell(row, route.action.target || route.action.content || route.action.file_name || route.action.file_path || 'Upload a file'); cell(row, counts.get(route.id)?.hits || 0); cell(row, counts.get(route.id)?.last_display || '—');
     const status = cell(row,''); const toggle = button(route.enabled?'Enabled':'Disabled',async()=>{await api('routes/'+route.id,'PATCH',{enabled:!route.enabled});await loadRoutes();},'badge'+(route.enabled?'':' off')); status.append(toggle); cell(row,'').append(button('Edit',()=>openRoute(route))); $('route-list').append(row);
   }
   $('routes-page').textContent = `Page ${routePage} · ${data.total} routes`; $('routes-prev').disabled = routePage===1; $('routes-next').disabled = routePage*50>=data.total;
@@ -58,7 +57,7 @@ function openRoute(route = null) {
   $('managed-info').textContent='';
   if (route) {
     for (const key of ['method','match','enabled','boundary']) { const el = f.elements[key]; if (el.type==='checkbox') el.checked=route[key]; else el.value=route[key]; }
-    f.elements.path.value = route.path.replaceAll('%','%25');
+    f.elements.path.value = encodeURI(route.path).replaceAll('?','%3F').replaceAll('#','%23');
     for (const key of ['type','content','format','target','status','source','disposition','download_name']) if (route.action[key] !== undefined) f.elements[key].value=route.action[key];
     f.elements.preserve_query.checked=route.action.preserve_query !== false;
     if (route.action.source !== 'managed') f.elements.file_path.value=route.action.file_path || '';
@@ -101,7 +100,7 @@ async function loadActivity() {
 }
 async function loadLogs(more=false) {
   const q=new URLSearchParams({limit:'50',hit_id:$('log-route').value});for(const name of ['from','to'])if($('log-'+name).value)q.set(name,new Date($('log-'+name).value).toISOString());if(more&&logCursor)q.set('cursor',logCursor);
-  const data=await api('stats/logs?'+q);if(!more)$('log-list').replaceChildren();for(const log of data.items){const row=document.createElement('tr');for(const value of [date(log.time),routes.find(v=>v.id===log.hit_id)?.path||log.hit_id||'Unmatched',log.path,log.method,log.status,log.ip,log.user_agent,log.referer])cell(row,value);$('log-list').append(row);}logCursor=data.next_cursor;$('logs-next').hidden=!logCursor;
+  const data=await api('stats/logs?'+q);if(!more)$('log-list').replaceChildren();for(const log of data.items){const row=document.createElement('tr');for(const value of [log.time_display,routes.find(v=>v.id===log.hit_id)?.path||log.hit_id||'Unmatched',log.path,log.method,log.status,log.ip,log.user_agent,log.referer])cell(row,value);$('log-list').append(row);}logCursor=data.next_cursor;$('logs-next').hidden=!logCursor;
 }
 document.querySelectorAll('nav button').forEach(element=>element.onclick=()=>showView(element.dataset.view).catch(e=>notice(e.message)));
 $('auth-form').onsubmit=async event=>{event.preventDefault();const f=event.currentTarget;f.querySelector('.form-error').textContent='';try{const result=await api(initialized?'login':'setup','POST',{username:f.elements.username.value,password:f.elements.password.value});csrf=result.csrf;f.reset();notice('');await start();}catch(e){errorIn(f,e);}};

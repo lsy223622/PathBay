@@ -34,7 +34,7 @@ func (a *App) statsAPI(w http.ResponseWriter, r *http.Request, endpoint string) 
 				apiError(w, 503, e.Error())
 				return
 			}
-			items = append(items, map[string]any{"kind": kind, "hit_id": id, "hits": hits, "last": last})
+			items = append(items, map[string]any{"kind": kind, "hit_id": id, "hits": hits, "last": last, "last_display": time.UnixMilli(last).In(a.zone.Load()).Format("2006-01-02 15:04:05 -0700")})
 		}
 		if e = rows.Err(); e != nil {
 			apiError(w, 503, e.Error())
@@ -102,14 +102,18 @@ func (a *App) statsAPI(w http.ResponseWriter, r *http.Request, endpoint string) 
 			return
 		}
 		defer rows.Close()
-		items := []Visit{}
+		type displayedVisit struct {
+			Visit
+			TimeDisplay string `json:"time_display"`
+		}
+		items := []displayedVisit{}
 		for rows.Next() {
 			var v Visit
 			if e = rows.Scan(&v.ID, &v.Time, &v.Kind, &v.HitID, &v.IP, &v.UserAgent, &v.Referer, &v.Path, &v.Method, &v.Status); e != nil {
 				apiError(w, 503, e.Error())
 				return
 			}
-			items = append(items, v)
+			items = append(items, displayedVisit{Visit: v, TimeDisplay: time.UnixMilli(v.Time).In(a.zone.Load()).Format("2006-01-02 15:04:05 -0700")})
 		}
 		if e = rows.Err(); e != nil {
 			apiError(w, 503, e.Error())
