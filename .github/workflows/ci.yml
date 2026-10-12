@@ -8,17 +8,17 @@ permissions:
   contents: read
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version: '1.27.2'
           cache: true
       - run: go test -race ./...
       - run: go vet ./...
       - run: go test ./internal/pathbay -run '^$' -bench . -benchmem | tee benchmarks.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: benchmark-results
           path: benchmarks.txt
@@ -27,12 +27,12 @@ jobs:
     strategy:
       matrix:
         arch: [amd64, arm64]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
+      - uses: actions/checkout@v7.0.1
+      - uses: docker/setup-qemu-action@v4.4.0
+      - uses: docker/setup-buildx-action@v4.4.1
+      - uses: docker/build-push-action@v7.4.0
         with:
           context: .
           platforms: linux/${{ matrix.arch }}
@@ -46,7 +46,7 @@ jobs:
           docker run --rm --platform linux/${{ matrix.arch }} pathbay:ci --help
           tar -czf pathbay-linux-${{ matrix.arch }}.tar.gz -C out pathbay -C "$GITHUB_WORKSPACE" README.md LICENSE
           sha256sum pathbay-linux-${{ matrix.arch }}.tar.gz > pathbay-linux-${{ matrix.arch }}.sha256
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: pathbay-linux-${{ matrix.arch }}
           path: |
@@ -56,11 +56,11 @@ jobs:
     needs: test
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version: '1.27.2'
-      - uses: msys2/setup-msys2@v2
+      - uses: msys2/setup-msys2@v2.33.0
         with:
           msystem: UCRT64
           update: false
@@ -75,10 +75,9 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           Compress-Archive -Path pathbay.exe,README.md,LICENSE -DestinationPath pathbay-windows-amd64.zip
           (Get-FileHash pathbay-windows-amd64.zip -Algorithm SHA256).Hash.ToLower() + '  pathbay-windows-amd64.zip' | Set-Content pathbay-windows-amd64.sha256
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: pathbay-windows-amd64
           path: |
             pathbay-windows-amd64.zip
             pathbay-windows-amd64.sha256
-

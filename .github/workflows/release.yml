@@ -6,9 +6,9 @@ permissions:
   contents: write
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - name: Collect verified CI artifacts for this commit
         env:
           GH_TOKEN: ${{ github.token }}
