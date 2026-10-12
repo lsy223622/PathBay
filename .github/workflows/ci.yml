@@ -59,6 +59,7 @@ jobs:
           "${compose[@]}" config --quiet
           "${compose[@]}" up -d
           curl --retry 15 --retry-all-errors --retry-delay 1 --max-time 5 -fsS http://127.0.0.1:7284/admin/api/v1/session | jq -e '.initialized == false'
+          test "$(ss -H -lnt 'sport = :7284' | awk '{print $4}')" = '127.0.0.1:7284'
           password=$(openssl rand -base64 32)
           status=$(jq -n --arg password "$password" '{username:"ci-test",password:$password}' | curl -sS -c /tmp/pathbay.cookies -o /tmp/pathbay-setup.json -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:7284/admin/api/v1/setup)
           test "$status" = 201 || { jq '.error' /tmp/pathbay-setup.json; exit 1; }
