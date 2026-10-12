@@ -46,7 +46,7 @@ jobs:
           docker run --rm --platform linux/${{ matrix.arch }} pathbay:ci --help
           container=$(docker run -d --platform linux/${{ matrix.arch }} -p 127.0.0.1:7284:7284 pathbay:ci)
           trap 'docker rm -f "$container" >/dev/null' EXIT
-          curl --retry 15 --retry-connrefused --retry-delay 1 -fsS http://127.0.0.1:7284/admin/api/v1/session | jq -e '.initialized == false'
+          curl --retry 15 --retry-all-errors --retry-delay 1 -fsS http://127.0.0.1:7284/admin/api/v1/session | jq -e '.initialized == false'
           password=$(openssl rand -base64 32)
           status=$(jq -n --arg password "$password" '{username:"ci-test",password:$password}' | curl -sS -o /tmp/pathbay-setup.json -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:7284/admin/api/v1/setup)
           test "$status" = 201 || { jq '.error' /tmp/pathbay-setup.json; exit 1; }
