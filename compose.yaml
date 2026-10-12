@@ -1,5 +1,6 @@
 services:
   pathbay:
+    container_name: pathbay
     image: ghcr.io/lsy223622/pathbay
     user: "1000:1000"
     network_mode: host
