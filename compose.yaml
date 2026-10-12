@@ -1,13 +1,13 @@
 services:
   pathbay:
-    image: ${PATHBAY_IMAGE:?Set PATHBAY_IMAGE to an explicit released image tag}
-    user: "${PATHBAY_UID:-1000}:${PATHBAY_GID:-1000}"
+    image: ghcr.io/lsy223622/pathbay
+    user: "1000:1000"
     network_mode: host
     restart: unless-stopped
     stop_grace_period: 45s
-    command: ["--listen", "127.0.0.1:${PATHBAY_PORT:-7284}", "--data-dir", "/data"]
+    command: ["--listen", "127.0.0.1:7284", "--data-dir", "/data"]
     environment:
-      TZ: ${PATHBAY_TZ:?Set PATHBAY_TZ before first initialization}
+      TZ: Asia/Shanghai
       PATHBAY_TRUSTED_PROXIES: "127.0.0.1/32,::1/128"
     volumes:
-      - ${PATHBAY_DATA_DIR:-./data}:/data
+      - ./data:/data

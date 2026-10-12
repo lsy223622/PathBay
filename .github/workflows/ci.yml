@@ -50,10 +50,10 @@ jobs:
           docker cp "$container:/usr/local/bin/pathbay" out/pathbay
           docker rm "$container"
           docker run --rm --platform linux/${{ matrix.arch }} "$image" --help
-          export PATHBAY_IMAGE="$image" PATHBAY_TZ=Asia/Shanghai PATHBAY_DATA_DIR="$RUNNER_TEMP/pathbay-data"
-          mkdir -p "$PATHBAY_DATA_DIR"
-          sudo chown 1000:1000 "$PATHBAY_DATA_DIR"
-          printf 'services:\n  pathbay:\n    platform: linux/%s\n' '${{ matrix.arch }}' > "$RUNNER_TEMP/platform.yaml"
+          data_dir="$RUNNER_TEMP/pathbay-data"
+          mkdir -p "$data_dir"
+          sudo chown 1000:1000 "$data_dir"
+          printf 'services:\n  pathbay:\n    image: %s\n    platform: linux/%s\n    volumes:\n      - %s:/data\n' "$image" '${{ matrix.arch }}' "$data_dir" > "$RUNNER_TEMP/platform.yaml"
           compose=(docker compose -p pathbay-ci -f compose.yaml -f "$RUNNER_TEMP/platform.yaml")
           trap '"${compose[@]}" down' EXIT
           "${compose[@]}" config --quiet
@@ -76,7 +76,8 @@ jobs:
           container=$("${compose[@]}" ps -q pathbay)
           docker commit --change 'LABEL io.pathbay.ci.update=true' "$container" pathbay:ci-updated-${{ matrix.arch }}
           test "$(docker image inspect pathbay:ci-updated-${{ matrix.arch }} --format '{{.Id}}')" != "$(docker image inspect "$image" --format '{{.Id}}')"
-          export PATHBAY_IMAGE=pathbay:ci-updated-${{ matrix.arch }} PATHBAY_TZ=UTC
+          sed -i "s|image: $image|image: pathbay:ci-updated-${{ matrix.arch }}|" "$RUNNER_TEMP/platform.yaml"
+          printf '    environment:\n      TZ: UTC\n' >> "$RUNNER_TEMP/platform.yaml"
           "${compose[@]}" up -d --force-recreate
           test "$("${compose[@]}" ps -q pathbay)" != "$container"
           curl --retry 15 --retry-all-errors --retry-delay 1 --max-time 5 -fsS http://127.0.0.1:7284/ci/file | cmp - /tmp/pathbay-upload.txt
