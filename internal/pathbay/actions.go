@@ -5,6 +5,19 @@ import (
 	"net/url"
 )
 
+func (s *Snapshot) publicError(w http.ResponseWriter, r *http.Request, code int) {
+	if code != http.StatusNotFound || len(s.notFound) == 0 {
+		http.Error(w, http.StatusText(code), code)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusNotFound)
+	if r.Method != "HEAD" {
+		_, _ = w.Write(s.notFound)
+	}
+}
+
 func (a *App) respond(w http.ResponseWriter, r *http.Request, route *Route) {
 	v := route.Action
 	switch v.Type {

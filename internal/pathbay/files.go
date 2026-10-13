@@ -21,7 +21,7 @@ func (a *App) fileResponse(w http.ResponseWriter, r *http.Request) (selected *Ro
 		if allow != "" {
 			w.Header().Set("Allow", allow)
 		}
-		http.Error(w, http.StatusText(code), code)
+		s.publicError(w, r, code)
 		return
 	}
 	if route.Action.Type != "file" && route.Action.Type != "directory" {
@@ -99,7 +99,7 @@ func (a *App) fileResponse(w http.ResponseWriter, r *http.Request) (selected *Ro
 		} else if errors.Is(err, os.ErrPermission) {
 			code = 403
 		}
-		http.Error(w, http.StatusText(code), code)
+		s.publicError(w, r, code)
 		return
 	}
 	if managed != "" {

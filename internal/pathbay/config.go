@@ -45,6 +45,8 @@ type LogFields struct {
 	Status    bool `json:"status"`
 }
 type Settings struct {
+	NotFoundHTML  string    `json:"not_found_html"`
+	LimitNotFound bool      `json:"limit_not_found"`
 	DetailedLogs  bool      `json:"detailed_logs"`
 	LogUnmatched  bool      `json:"log_unmatched"`
 	Fields        LogFields `json:"fields"`

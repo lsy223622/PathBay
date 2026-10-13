@@ -267,7 +267,7 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request) {
 		if endpoint == "builtins" {
 			err = decodeBody(w, r, &c.Builtins, 16<<10)
 		} else {
-			err = decodeBody(w, r, &c.Settings, 16<<10)
+			err = decodeBody(w, r, &c.Settings, 2<<20)
 		}
 		if err != nil {
 			bodyError(w, err)

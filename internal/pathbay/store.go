@@ -22,6 +22,7 @@ type Options struct {
 }
 type App struct {
 	StatsState
+	misses    missLimiter
 	db        *sql.DB
 	lock      *flock.Flock
 	options   Options

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -13,12 +14,16 @@ type Snapshot struct {
 	exact    map[string][]*Route
 	prefixes []*Route
 	ids      map[string]bool
+	notFound []byte
 }
 
 func BuildSnapshot(c Config) (*Snapshot, error) {
 	c = cloneConfig(c)
-	s := &Snapshot{Config: c, exact: map[string][]*Route{}, ids: map[string]bool{}}
+	s := &Snapshot{Config: c, exact: map[string][]*Route{}, ids: map[string]bool{}, notFound: []byte(c.Settings.NotFoundHTML)}
 	unique := map[string]bool{}
+	if len(s.notFound) > 1<<20 {
+		return nil, fmt.Errorf("404 HTML exceeds 1 MiB")
+	}
 	if c.Settings.RetentionDays < 0 {
 		return nil, fmt.Errorf("retention must be nonnegative")
 	}
@@ -124,15 +129,20 @@ func (s *Snapshot) Match(method, p string) (*Route, int, string) {
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	visitTime := time.Now()
 	kind, id := "", ""
+	limited, missing, limitEnabled := false, false, false
+	ip := ""
 	tracked := &statusWriter{ResponseWriter: w, head: r.Method == "HEAD"}
 	w = tracked
 	defer func() {
-		if r.URL.Path == "/admin" || strings.HasPrefix(r.URL.Path, "/admin/") {
+		if limited || r.URL.Path == "/admin" || strings.HasPrefix(r.URL.Path, "/admin/") {
 			return
 		}
 		code := tracked.code
 		if code == 0 {
 			code = 200
+		}
+		if limitEnabled && missing && code == http.StatusNotFound {
+			a.misses.record(ip, time.Now())
 		}
 		a.recordVisit(r, code, kind, id, visitTime)
 	}()
@@ -157,8 +167,24 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s := a.snapshot.Load()
+	limitEnabled = s.Config.Settings.LimitNotFound
+	if limitEnabled {
+		ip = a.clientIP(r)
+		if retry := a.misses.retryAfter(ip, visitTime); retry > 0 {
+			limited = true
+			w.Header().Set("Retry-After", strconv.Itoa(retry))
+			w.Header().Set("Cache-Control", "no-store")
+			http.Error(w, "Too many requests. Please retry later.", http.StatusTooManyRequests)
+			return
+		}
+	}
 	if p == "/ip" || p == "/time" || p == "/random" {
 		name := strings.TrimPrefix(p, "/")
+		missing = !s.Config.Builtins[name]
+		if missing && len(s.notFound) > 0 {
+			s.publicError(w, r, http.StatusNotFound)
+			return
+		}
 		if s.Config.Builtins[name] && (r.Method == "GET" || r.Method == "HEAD") {
 			kind, id = "builtin", name
 		}
@@ -167,15 +193,17 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	route, code, allow := s.Match(r.Method, p)
 	if route == nil {
+		missing = code == http.StatusNotFound
 		if allow != "" {
 			w.Header().Set("Allow", allow)
 		}
-		http.Error(w, http.StatusText(code), code)
+		s.publicError(w, r, code)
 		return
 	}
 	kind, id = "route", route.ID
 	if route.Action.Type == "file" || route.Action.Type == "directory" {
 		selected := a.fileResponse(w, r)
+		missing = tracked.code == http.StatusNotFound
 		if selected == nil {
 			kind, id = "", ""
 		} else {

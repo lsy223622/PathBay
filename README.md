@@ -5,6 +5,18 @@ text/HTML, JSON, downloads and static directories from an embedded admin page.
 Builtins provide IP, time and random values. A single administrator manages the
 instance through the browser or the JSON API.
 
+Settings includes an optional limit for repeated missing-resource requests,
+disabled by default. After 20 such responses from one IP within 60 seconds,
+public requests from that IP receive `429` with `Retry-After` for 5 minutes.
+Access restores automatically; administration remains available. Limited
+requests are excluded from access statistics and logs. Counters are kept only
+in memory and work independently of detailed logging.
+
+Paste a custom 404 HTML page in Settings to use it for missing public routes,
+missing files and disabled builtins. Responses retain HTTP status `404`.
+Leave it empty to use the default response. The HTML is included in configuration
+JSON exports and can contain up to 1 MiB.
+
 ## Run
 
 Download an archive from [Releases](https://github.com/lsy223622/PathBay/releases/latest), extract it and run:
