@@ -103,7 +103,7 @@ IDs; any conflict rejects the whole batch.
 
 ## Build and Docker
 
-Go 1.27 with CGO and a C compiler is required. SQLite is linked from
+Go 1.27.3 or later with CGO and a C compiler is required. SQLite is linked from
 [go-sqlite3](https://github.com/mattn/go-sqlite3).
 
 ```sh
